@@ -1,19 +1,10 @@
 //===- AffineToStandard.cpp - Lower affine constructs to primitives -------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file lowers affine constructs (If and For statements, AffineApply
 // operations) within a function into their standard If and For equivalent ops.
@@ -22,6 +13,7 @@
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 
+#include "mlir/Analysis/NestedMatcher.h"
 #include "mlir/Dialect/AffineOps/AffineOps.h"
 #include "mlir/Dialect/LoopOps/LoopOps.h"
 #include "mlir/Dialect/StandardOps/Ops.h"
@@ -36,6 +28,231 @@
 #include "mlir/Transforms/Passes.h"
 
 using namespace mlir;
+
+static llvm::cl::opt<bool>
+    clUseNestedPatterns("use-nested-patterns",
+                        llvm::cl::desc("use nested patterns in gemm matching"),
+                        llvm::cl::init(false));
+
+namespace {
+
+
+// Class for matching a top-level `affine.for` Op in the MLIR pattern matching
+// framework.
+class MatmulMatcher : public OpRewritePattern<AffineForOp> {
+public:
+  using OpRewritePattern<AffineForOp>::OpRewritePattern;
+
+
+  /// Returns the AffineForOp perfectly nested in the given Op. Perfectly nested
+  /// means it is the only non-terminator operation in the first region of `op`.
+  /// If the nested Op is imperfectly nested, or not an AffineForOp, returns
+  /// nullptr.
+  AffineForOp getPerfectlyNestedLoop(Operation *op) const {
+    if (!op)
+      return nullptr;
+
+    assert(op->getNumRegions() > 0 && "expected Op with regions");
+
+    Region &bodyRegion = op->getRegion(0);
+    assert(bodyRegion.getBlocks().size() == 1 && "expecte single-block region");
+
+    // Check for perfect-nestedness.
+    Block &body = bodyRegion.front();
+    if (std::distance(body.begin(), body.end()) != 2)
+      return nullptr;
+
+    assert(!body.back().isKnownNonTerminator() &&
+           "unexpected non-terminator at the end of the block");
+    return dyn_cast<AffineForOp>(body.front());
+  }
+
+  /// Checks if the given `op` is an affine load/store operation accessing a 2D
+  /// memref using the subscript [d1][d2].
+  template <typename OpTy>
+  bool is2DAccess(OpTy op, Value *d1, Value *d2) const {
+    static_assert(std::is_same<OpTy, AffineLoadOp>::value ||
+                      std::is_same<OpTy, AffineStoreOp>::value,
+                  "expected affine load or store");
+
+    Value *operand1 = *op.getMapOperands().begin();
+    Value *operand2 = *(op.getMapOperands().begin() + 1);
+
+    return (op.getAffineMap().isIdentity() &&
+            op.getAffineMap().getNumResults() == 2 && d1 == operand1 &&
+            d2 == operand2);
+  }
+
+  /// Checks if the given `op` is an affine load/store operation accessing a 2D
+  /// memref using as subscripts any pair of values in `indices`. If so, assigns
+  /// those indices to `first` and `second` and returns `true`. Returs `false`
+  /// otherwise. Expects `op`, `first` a `second` to be non-null and `indices`
+  /// to contain exactly three values.
+  template <typename OpTy>
+  bool anyPermutation(OpTy op, SmallVector<Value *, 3> indices,
+                      Value **first, Value **second) const {
+    assert(first);
+    assert(second);
+
+    if (!op)
+      return false;
+
+    // TODO: This is a hack to obtain all pairs of 2 out of 3 possible values
+    // using next permutation. We need a more robust way of obtaining a subset,
+    // on which we can call next permutation.
+    assert(indices.size() == 3);
+    // SSA values are pointer-comparable so we can just sort and iterate through
+    // all value pointers.
+    std::sort(indices.begin(), indices.end());
+    while (std::next_permutation(indices.begin(), indices.end())) {
+      if (is2DAccess(op, indices[0], indices[1])) {
+        *first = indices[0];
+        *second = indices[1];
+        return true;
+      }
+       if (is2DAccess(op, indices[1], indices[0])) {
+        *first = indices[1];
+        *second = indices[0];
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /// Match the region (assumed to be the body of the inntermost loop) to be
+  /// a matrix multiplication kernel.
+  PatternMatchResult matchBody(Region &body, Value *i, Value *j,
+                               Value *k) const {
+    // We proceed in the reverse order to leverage use-def chains.
+    // TODO: a better mathcher-like syntax could be beneficial in either C++ or
+    // Tablegen, or both.
+
+    // Check that the last operation before we exit the body (i.e. before the
+    // mandatory terminator) is a store.
+    Value *storeD1, *storeD2;
+    auto store = dyn_cast<AffineStoreOp>(*std::prev(body.front().end(), 2));
+    if (!anyPermutation(store, {i, j, k}, &storeD1, &storeD2))
+      return matchFailure();
+
+    // Check that the value we store was computed as the result of an floating
+    // point addition (the second operation in the matmul kernel).
+    auto add =
+        dyn_cast_or_null<AddFOp>(store.getValueToStore()->getDefiningOp());
+    if (!add)
+      return matchFailure();
+
+    // Check that the left operand of the add comes from a load that uses the
+    // same array and the same subscripts as the store.
+    // TODO: relax the order of operands
+    // TODO: introduce the notion of placeholders instead of using explicit
+    // value matching here.
+    auto loadC = dyn_cast_or_null<AffineLoadOp>(add.lhs()->getDefiningOp());
+    Value *loadCD1, *loadCD2;
+    if (!loadC || !anyPermutation(loadC, {i, j, k}, &loadCD1, &loadCD2) ||
+        loadC.getMemRef() != store.getMemRef() || loadCD1 != storeD1 ||
+        loadCD2 != storeD2)
+      return matchFailure();
+
+    // Check that the right operand of the add comes from a floating point
+    // multiplication (the first operation in the matmul kernel).
+    // TODO: relax the order of operands
+    auto mul = dyn_cast_or_null<MulFOp>(add.rhs()->getDefiningOp());
+    if (!mul)
+      return matchFailure();
+
+    // Check that the left and right operands of a multiplication come from
+    // loads.
+    auto loadA = dyn_cast_or_null<AffineLoadOp>(mul.lhs()->getDefiningOp());
+    auto loadB = dyn_cast_or_null<AffineLoadOp>(mul.rhs()->getDefiningOp());
+    if (!loadA || !loadB)
+      return matchFailure();
+
+    // Given loads A(a1,a2), B(b1,b2), C(c1,c2) [defined above], check that the
+    // subscripts match as in a1=c1, b2=c2, a2=b1.
+    // TODO: support transposed matrix multiplications here.
+    Value *loadAD1, *loadAD2, *loadBD1, *loadBD2;
+    if (!anyPermutation(loadA, {i, j, k}, &loadAD1, &loadAD2) ||
+        !anyPermutation(loadB, {i, j, k}, &loadBD1, &loadBD2) ||
+        loadAD1 != loadCD1 || loadBD2 != loadCD2 || loadAD2 != loadBD1)
+      return matchFailure();
+
+    // Check that only the operations that we've seen already are in the region.
+    // In particular, there must be 3 loads, 1 store, 1 mul, 1 add and 1
+    // implicit terminator, totalling 7 operations.
+    // TODO: we may be lenient to operations without side-effects, but they
+    // should have been removed by DCE beforehand.
+    if (std::distance(body.front().begin(), body.front().end()) != 7)
+      return matchFailure();
+
+    return matchSuccess();
+  }
+
+  /// Main rewriting function. Doesn't do actual rewriting here, just checks
+  /// that the matching works.
+  PatternMatchResult matchAndRewrite(AffineForOp op,
+                                     PatternRewriter &rewriter) const override {
+    if (clUseNestedPatterns)
+      return matchAndRewriteNestedPattern(op, rewriter);
+    else
+      return matchAndRewriteRegionTraversal(op, rewriter);
+  }
+
+  PatternMatchResult
+  matchAndRewriteRegionTraversal(AffineForOp op,
+                                 PatternRewriter &rewriter) const {
+    AffineForOp nested1 = getPerfectlyNestedLoop(op);
+    AffineForOp nested2 = getPerfectlyNestedLoop(nested1);
+
+    if (!nested1 || !nested2)
+      return matchFailure();
+
+    Value *i = op.getInductionVar();
+    Value *j = nested1.getInductionVar();
+    Value *k = nested2.getInductionVar();
+
+    if (!matchBody(nested2.getLoopBody(), i, j, k))
+      return matchFailure();
+
+    llvm::outs() << "match succeeded\n";
+
+    rewriter.eraseOp(op);
+
+    return matchSuccess();
+  }
+
+  // Same as above but using the new nested matcher infrastructure. The body
+  // part is still based on the use-def chain.
+  PatternMatchResult
+  matchAndRewriteNestedPattern(Operation *op, PatternRewriter &rewriter) const {
+    auto body = [this](Operation &op) -> bool {
+      auto loop = cast<AffineForOp>(op);
+      Value *k = loop.getInductionVar();
+      auto parent = loop.getParentOfType<AffineForOp>();
+      Value *j = parent.getInductionVar();
+      parent = parent.getParentOfType<AffineForOp>();
+      Value *i = parent.getInductionVar();
+      return matchBody(loop.getLoopBody(), i, j, k).hasValue();
+    };
+
+    {
+      NestedPatternContext raii;
+      using namespace matcher;
+      auto m = For(For(For(body)));
+      SmallVector<NestedMatch, 1> matches;
+      m.match(op, &matches);
+      if (matches.empty())
+        return matchFailure();
+    }
+
+    llvm::outs() << "match succeeded\n";
+
+    rewriter.eraseOp(op);
+
+    return matchSuccess();
+  }
+};
+}
 
 namespace {
 // Visit affine expressions recursively and build the sequence of operations
@@ -507,9 +724,7 @@ public:
 void mlir::populateAffineToStdConversionPatterns(
     OwningRewritePatternList &patterns, MLIRContext *ctx) {
   patterns
-      .insert<AffineApplyLowering, AffineDmaStartLowering,
-              AffineDmaWaitLowering, AffineLoadLowering, AffineStoreLowering,
-              AffineForLowering, AffineIfLowering, AffineTerminatorLowering>(
+      .insert<MatmulMatcher>(
           ctx);
 }
 

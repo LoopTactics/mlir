@@ -7,6 +7,7 @@ add_llvm_library(MLIRAffineToStandard
 add_dependencies(
   MLIRAffineToStandard
 
+  MLIRAnalysis
   MLIRAffineOps
   MLIRStandardOps
   MLIRIR
