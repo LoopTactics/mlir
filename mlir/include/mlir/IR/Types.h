@@ -178,6 +178,10 @@ public:
   /// Return true if this is an integer (of any signedness), index, or float
   /// type.
   bool isIntOrIndexOrFloat();
+  /// Return true if this is an integer type.
+  bool isInt();
+  /// Return true if this is a float type.
+  bool isFloat();
 
   /// Print the current type.
   void print(raw_ostream &os);

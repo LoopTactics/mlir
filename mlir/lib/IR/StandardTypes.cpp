@@ -88,6 +88,10 @@ bool Type::isIntOrFloat() { return isa<IntegerType>() || isa<FloatType>(); }
 
 bool Type::isIntOrIndexOrFloat() { return isIntOrFloat() || isIndex(); }
 
+bool Type::isInt() { return isa<IntegerType>(); }
+
+bool Type::isFloat() { return isa<FloatType>(); }
+
 //===----------------------------------------------------------------------===//
 // Integer Type
 //===----------------------------------------------------------------------===//
