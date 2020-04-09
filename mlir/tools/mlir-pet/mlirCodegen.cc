@@ -7,7 +7,7 @@ using namespace codegen;
 using namespace mlir;
 using namespace llvm;
 using namespace pet;
-
+using namespace std;
 LoopTable &MLIRCodegen::getLoopTable() { return loopTable_; }
 
 // helper function to get the indexes of the output dimensions
@@ -433,6 +433,63 @@ LogicalResult MLIRCodegen::verifyModule() {
   return success();
 }
 
+
+AffineForOp MLIRCodegen::createLoop(int ub, int lb, int step) {
+
+
+  auto lbMap = AffineMap::getConstantMap(lb, builder_.getContext());
+  auto ubMap = AffineMap::getConstantMap(ub, builder_.getContext());
+  ValueRange ubOperands = {};
+  ValueRange lbOperands = {};
+  auto loop = builder_.create<AffineForOp>(builder_.getUnknownLoc(), lbOperands, lbMap, ubOperands, ubMap, step);
+  loop.getBody()->clear();
+
+
+
+
+  builder_.setInsertionPointToStart(loop.getBody());
+  builder_.create<AffineTerminatorOp>(builder_.getUnknownLoc());
+  builder_.setInsertionPointToStart(loop.getBody());
+
+
+  return loop;
+}
+
+AffineForOp MLIRCodegen::createLoop (int lb, string symbol, int step) {
+	outs() << "IM in!";
+
+ Value ub;
+ if(failed(this->getLoopTable().find(symbol,ub)))outs() << "failed";
+
+  auto lbMap = AffineMap::getConstantMap(lb, builder_.getContext());
+  auto ubMap = AffineMap::getMultiDimIdentityMap(1, builder_.getContext());
+ 
+  ValueRange ubOperands = ValueRange{ub};
+  ValueRange lbOperands = {};
+	outs() << "trying to build affinefor \n";
+	ubMap.print(outs());
+	this->getLoopTable().dump();
+//	ub.print(outs());
+  auto loop = builder_.create<AffineForOp>(builder_.getUnknownLoc(), lbOperands, lbMap, 
+		ubOperands, ubMap, step);
+ 
+
+     outs() << "Ive buuilt the affinefor";
+
+ loop.getBody()->clear();
+ 
+
+
+  builder_.setInsertionPointToStart(loop.getBody());
+  builder_.create<AffineTerminatorOp>(builder_.getUnknownLoc());
+  builder_.setInsertionPointToStart(loop.getBody());
+
+
+  return loop;
+}
+
+
+/*
 AffineForOp MLIRCodegen::createLoop(int upperBound, int lowerBound, int step) {
   auto loop = builder_.create<AffineForOp>(builder_.getUnknownLoc(), lowerBound,
                                            upperBound, step);
@@ -443,6 +500,26 @@ AffineForOp MLIRCodegen::createLoop(int upperBound, int lowerBound, int step) {
   return loop;
 }
 
+
+AffineForOp MLIRCodegen::createLoop(string symbol, int lb, int step) {
+  auto upperBound = this->getLoopTable().find(symbol);
+
+  auto lbMap = AffineMap::getConstantMap(lb, builder_.getContext());
+  auto ubMap = AffineMap::getConstantMap(upperBound, builder_.getContext());
+  ValueRange ubOperands = {};
+  ValueRange lbOperands = {};
+  auto loop = builder_.create<AffineForOp>(builder_.getUnknownLoc(), lbOperands, lbMap, ubOperands, ubMap, step);
+
+
+
+
+  loop.getBody()->clear();
+  builder_.setInsertionPointToStart(loop.getBody());
+  builder_.create<AffineTerminatorOp>(builder_.getUnknownLoc());
+  builder_.setInsertionPointToStart(loop.getBody());
+  return loop;
+}
+*/
 void MLIRCodegen::createReturn() {
   builder_.create<ReturnOp>(builder_.getUnknownLoc());
 }

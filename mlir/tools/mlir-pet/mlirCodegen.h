@@ -15,7 +15,6 @@
 #include <map>
 
 namespace codegen {
-
 enum class BinaryOpType { ADD, MUL, SUB, DIV };
 
 class SymbolTable {
@@ -71,7 +70,7 @@ public:
 
   // create an affineForOp.
   mlir::AffineForOp createLoop(int lowerBound, int upperBound, int step);
-
+  mlir::AffineForOp createLoop(int lowerBound, std::string Upperbound, int step);
   // return a reference to loop table.
   LoopTable &getLoopTable();
 

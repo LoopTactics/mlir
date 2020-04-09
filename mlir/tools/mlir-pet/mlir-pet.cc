@@ -30,17 +30,17 @@ int main(int argc, char **argv) {
 
   auto ctx = ScopedCtx();
   auto petScop = Scop::parseFile(ctx, inputFileName);
-  // petScop.dump();
+  petScop.dump();
 
   MLIRContext context;
   MLIRCodegen MLIRbuilder(context, petScop);
 
   auto ISLAst = IslAst(petScop);
-  // ISLAst.dump();
+  ISLAst.dump();
 
   auto ISLNodeBuilder = IslNodeBuilder(ISLAst, MLIRbuilder);
   ISLNodeBuilder.MLIRFromISLAst();
-  // MLIRbuilder.dump();
+   MLIRbuilder.dump();
 
   if (outputFileName.empty()) {
     MLIRbuilder.print(outs());

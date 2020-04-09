@@ -1086,6 +1086,7 @@ LogicalResult AffineDmaWaitOp::fold(ArrayRef<Attribute> cstOperands,
 void AffineForOp::build(Builder *builder, OperationState &result,
                         ValueRange lbOperands, AffineMap lbMap,
                         ValueRange ubOperands, AffineMap ubMap, int64_t step) {
+     llvm::outs() <<  "Im in the builder";
   assert(((!lbMap && lbOperands.empty()) ||
           lbOperands.size() == lbMap.getNumInputs()) &&
          "lower bound operand count does not match the affine map");
@@ -1093,6 +1094,7 @@ void AffineForOp::build(Builder *builder, OperationState &result,
           ubOperands.size() == ubMap.getNumInputs()) &&
          "upper bound operand count does not match the affine map");
   assert(step > 0 && "step has to be a positive integer constant");
+      llvm::outs() <<  "Ive survived the tests";
 
   // Add an attribute for the step.
   result.addAttribute(getStepAttrName(),
@@ -1105,6 +1107,7 @@ void AffineForOp::build(Builder *builder, OperationState &result,
   // Add the upper bound.
   result.addAttribute(getUpperBoundAttrName(), AffineMapAttr::get(ubMap));
   result.addOperands(ubOperands);
+   llvm::outs() <<  "\n and adding";
 
   // Create a region and a block for the body.  The argument of the region is
   // the loop induction variable.
@@ -1113,9 +1116,11 @@ void AffineForOp::build(Builder *builder, OperationState &result,
   body->addArgument(IndexType::get(builder->getContext()));
   bodyRegion->push_back(body);
   ensureTerminator(*bodyRegion, *builder, result.location);
+   llvm::outs() <<  "\n and creating";
 
   // Set the operands list as resizable so that we can freely modify the bounds.
   result.setOperandListToResizable();
+    llvm::outs() <<  "\n I should be returning already";
 }
 
 void AffineForOp::build(Builder *builder, OperationState &result, int64_t lb,

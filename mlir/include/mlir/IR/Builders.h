@@ -10,7 +10,7 @@
 #define MLIR_IR_BUILDERS_H
 
 #include "mlir/IR/OpDefinition.h"
-
+#include "llvm/Support/raw_ostream.h"
 namespace mlir {
 
 class AffineExpr;
@@ -292,11 +292,19 @@ public:
   /// Create an operation of specific op type at the current insertion point.
   template <typename OpTy, typename... Args>
   OpTy create(Location location, Args &&... args) {
+    llvm::outs() << "\n This is create";
     OperationState state(location, OpTy::getOperationName());
     OpTy::build(this, state, std::forward<Args>(args)...);
+    llvm::outs() << "\n Im back from the builder" ;
     auto *op = createOperation(state);
+    llvm::outs() << "\n Im back from the builder" ;
+
     auto result = dyn_cast<OpTy>(op);
+llvm::outs() << "\n Im back from the builder" ;
+
     assert(result && "Builder didn't return the right type");
+llvm::outs() << "\n Im back from the builder" ;
+
     return result;
   }
 

@@ -19,8 +19,10 @@ static isl::ast_expr getUpperBound(isl::ast_node nodeFor) {
 // TODO: Is Int enough or should we return a Value? see:
 // https://github.com/llvm/llvm-project/blob/2c1a142a78ffe8ed06fd7bfd17750afdceeaecc9/polly/lib/CodeGen/IslExprBuilder.cpp#L746
 static int createIntFromIslExpr(isl::ast_expr expression) {
-  if (isl_ast_expr_get_type(expression.get()) != isl_ast_expr_int)
+  if (isl_ast_expr_get_type(expression.get()) != isl_ast_expr_int){
+   outs() << isl_ast_expr_get_type(expression.get());
     llvm_unreachable("expect isl_ast_expr_int expression");
+  }
   auto val = expression.get_val();
   return std::stoi(val.to_str());
 }
@@ -37,10 +39,19 @@ void IslNodeBuilder::createFor(isl::ast_node forNode) {
 
   auto lowerBoundAsInt = createIntFromIslExpr(lowerBound);
   auto incrementAsInt = createIntFromIslExpr(increment);
-  auto upperBoundAsInt = createIntFromIslExpr(upperBound);
+  
 
-  auto loop =
-      MLIRBuilder_.createLoop(lowerBoundAsInt, upperBoundAsInt, incrementAsInt);
+   
+ if (isl_ast_expr_get_type(upperBound.get()) != isl_ast_expr_int){
+  //modify upp to test symbolic
+	outs() << "Stage 1 JOjojojojojo";
+	auto upperBound_id =isl_ast_expr_get_id(upperBound.get());
+	auto upperBound_processed = isl_id_get_name(upperBound_id);
+	outs() << upperBound_processed;
+	outs() << "I m calling create loop";
+         auto loop =
+      MLIRBuilder_.createLoop(lowerBoundAsInt, upperBound_processed, incrementAsInt);
+ 	outs() << "I have returned from create loop";
 
   auto resInsertion =
       MLIRBuilder_.getLoopTable().insert(iteratorId, loop.getInductionVar());
@@ -56,7 +67,32 @@ void IslNodeBuilder::createFor(isl::ast_node forNode) {
 
   // set the insertion point after the loop operation.
   MLIRBuilder_.setInsertionPointAfter(&loop);
+
+
+ }
+else{
+ 
+	auto upperBound_processed = createIntFromIslExpr(upperBound);
+	 auto loop = MLIRBuilder_.createLoop(lowerBoundAsInt, upperBound_processed, incrementAsInt);
+
+    auto resInsertion =
+      MLIRBuilder_.getLoopTable().insert(iteratorId, loop.getInductionVar());
+  if (failed(resInsertion))
+    llvm_unreachable("failed to insert in loop table");
+
+  // create loop body.
+  MLIRFromISLAstImpl(forNode.for_get_body());
+
+  // induction variable goes out of scop. Remove from
+  // loopTable
+  MLIRBuilder_.getLoopTable().erase(iteratorId);
+
+  // set the insertion point after the loop operation.
+  MLIRBuilder_.setInsertionPointAfter(&loop);
+
+ }	
 }
+
 
 void IslNodeBuilder::createUser(isl::ast_node userNode) {
   auto expression = userNode.user_get_expr();
