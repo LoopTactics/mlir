@@ -31,6 +31,9 @@ bool isInt(isl::ast_expr expression) {
 bool isId(isl::ast_expr expression) {
   return isl_ast_expr_get_type(expression.get()) == isl_ast_expr_id;
 }
+bool isOp(isl::ast_expr expression) {
+  return isl_ast_expr_get_type(expression.get()) == isl_ast_expr_op;
+}
 // TODO: See how we can get location information.
 // TODO: handle degenerate loop (see isl_ast_node_for_is_degenerate)
 // TODO: See how to handle more complex expression in the loop.
@@ -78,7 +81,22 @@ void IslNodeBuilder::createFor(isl::ast_node forNode) {
     loop = MLIRBuilder_.createLoop(lowerBoundProcessed, upperBoundProcessed,
                                    incrementAsInt);
   }
-
+  // op lower bound
+  else if (isOp(lowerBound) && isInt(upperBound)) {
+    //if(isl_ast_expr_get_op_type(expr.get()) != isl_ast_expr_op_add)
+     // llvm_unreachable("AST-op type not handled");
+    
+      
+    auto id = lowerBound.get_op_arg(0);
+    auto lbOffset = createIntFromIslExpr(lowerBound.get_op_arg(1));
+    // get id from node type
+    auto lowerBoundId = isl::manage(isl_ast_expr_get_id(id.get()));
+    // access string name
+    auto lowerBoundProcessed = isl_id_get_name(lowerBoundId.get());
+    auto upperBoundProcessed = std::abs(createIntFromIslExpr(upperBound) + 1);
+    loop = MLIRBuilder_.createLoop(lowerBoundProcessed, lbOffset, upperBoundProcessed,
+                                   incrementAsInt);
+  }
   // double integer bounds
   else {
     auto upperBoundProcessed = std::abs(createIntFromIslExpr(upperBound) + 1);

@@ -831,7 +831,31 @@ AffineForOp MLIRCodegen::createLoop(std::string lb_id, int ub, int step) {
 
   auto ubMap = AffineMap::getConstantMap(ub, builder_.getContext());
   auto lbMap = AffineMap::getMultiDimIdentityMap(1, builder_.getContext());
+  
+  ValueRange ubOperands = {};
+  ValueRange lbOperands = ValueRange(lb);
 
+  auto loop = builder_.create<AffineForOp>(builder_.getUnknownLoc(), lbOperands,
+                                           lbMap, ubOperands, ubMap, step);
+  loop.getBody()->clear();
+
+  builder_.setInsertionPointToStart(loop.getBody());
+  builder_.create<AffineTerminatorOp>(builder_.getUnknownLoc());
+  builder_.setInsertionPointToStart(loop.getBody());
+
+  return loop;
+}
+
+
+AffineForOp MLIRCodegen::createLoop(std::string lb_id, int lb_offset, int ub, int step) {
+  Value lb;
+  if (failed(this->getLoopTable().find(lb_id, lb)))
+    llvm_unreachable("Couldn't find the bound in the loop table.");
+
+  auto ubMap = AffineMap::getConstantMap(ub, builder_.getContext());
+  auto dim = builder_.getAffineDimExpr(0);
+  auto lbMap = AffineMap::get(1, 0, dim + lb_offset);
+  
   ValueRange ubOperands = {};
   ValueRange lbOperands = ValueRange(lb);
 
