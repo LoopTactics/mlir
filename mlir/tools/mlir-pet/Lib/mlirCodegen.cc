@@ -695,6 +695,7 @@ Value MLIRCodegen::createOp(__isl_take pet_expr *expr, Type t) {
   case pet_op_ge:
   case pet_op_lt:
   case pet_op_minus:
+    return builder_.create<NegFOp>(location, lhs);
   case pet_op_pre_inc:
   case pet_op_pre_dec:
   case pet_op_address_of:
@@ -908,6 +909,38 @@ Value MLIRCodegen::createExpr(__isl_keep pet_expr *expr, Type t) {
   return nullptr;
 }
 
+Value MLIRCodegen::createAstOp(__isl_take isl::noexceptions::ast_expr expr,
+                               int pos) {
+  auto loc = builder_.getUnknownLoc();
+  if (isl_ast_expr_get_op_type(expr.get()) == isl_ast_expr_op_minus) {
+
+    Value val;
+    // get the corresponding index variable
+
+    SmallVector<Value, 4> vals = SmallVector<Value, 4>();
+    for (int i = 0; i <= pos; i++) {
+      loopTable_.getValueAtPos(i, val);
+      vals.push_back(val);
+    }
+    // construct a map d0,d1 -> -d1 for minusOP
+    SmallVector<AffineExpr, 4> result = SmallVector<AffineExpr, 4>();
+
+    for (int i = 0; i < pos; i++) {
+
+      result.push_back(builder_.getAffineDimExpr(i));
+    }
+    result.push_back(-builder_.getAffineDimExpr(pos));
+
+    auto ubMap = AffineMap::get(pos + 1, 0, -builder_.getAffineDimExpr(pos));
+
+    // return the ApplyOp value
+    return builder_.create<AffineApplyOp>(loc, ubMap, vals);
+
+  } else {
+    llvm_unreachable("AST-op type not handled");
+    return nullptr;
+  }
+}
 LogicalResult MLIRCodegen::createStmt(__isl_keep pet_expr *expr) {
   LLVM_DEBUG(dbgs() << __func__ << "\n");
   auto Value = createExpr(expr);
@@ -1123,6 +1156,14 @@ LogicalResult LoopTable::getValueAtPos(size_t pos, Value &value) const {
   auto it = begin();
   std::advance(it, pos);
   value = it->second;
+  return success();
+}
+
+LogicalResult LoopTable::update(std::string key, Value &value) {
+  if (failed(find(key)))
+    return failure();
+  symbolTable_[key] = value;
+
   return success();
 }
 

@@ -41,12 +41,11 @@ public:
   void dump() const;
 
 private:
-  // the symbol table maps a loop value to the loop id.
-  std::map<std::string, mlir::Value> symbolTable_;
-
 protected:
   // dump helper.
   void dumpImpl() const;
+  // the symbol table maps a loop value to the loop id.
+  std::map<std::string, mlir::Value> symbolTable_;
 
 public:
   decltype(symbolTable_.begin()) begin() { return symbolTable_.begin(); }
@@ -72,6 +71,8 @@ public:
   // insert a new mapping for induction variables.
   // i.e., i mapped with c0.
   void insertMapping(std::string idPet, std::string idIsl);
+
+  mlir::LogicalResult update(std::string key, mlir::Value &value);
 
   // dump the current state.
   void dump() const;
@@ -107,6 +108,8 @@ public:
   mlir::AffineForOp createLoop(mlir::AffineExpr lbExpr, std::string lb,
                                mlir::AffineExpr ubExpr, std::string ub,
                                int step);
+
+  mlir::Value createAstOp(__isl_take isl::noexceptions::ast_expr expr, int pos);
 
   // return a reference to loop table.
   LoopTable &getLoopTable();

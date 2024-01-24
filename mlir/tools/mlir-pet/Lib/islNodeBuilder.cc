@@ -160,11 +160,38 @@ void IslNodeBuilder::createFor(isl::ast_node forNode) {
 
 void IslNodeBuilder::createUser(isl::ast_node userNode) {
   auto expression = userNode.user_get_expr();
-  if (isl_ast_expr_get_type(expression.get()) != isl_ast_expr_op)
-    llvm_unreachable("expect isl_ast_expr_op");
-  if (isl_ast_expr_get_op_type(expression.get()) != isl_ast_op_call)
-    llvm_unreachable("expect operation of type call");
+  /* if (isl_ast_expr_get_type(expression.get()) != isl_ast_expr_op)
+     llvm_unreachable("expect isl_ast_expr_op");
+   if (isl_ast_expr_get_op_type(expression.get()) != isl_ast_op_call)
+     llvm_unreachable("expect operation of type call");*/
   auto stmtExpression = expression.get_op_arg(0);
+
+  auto n_args = isl_ast_expr_op_get_n_arg(expression.get());
+
+  // is there a Minusop in arguments?
+  LoopTable tempTable = MLIRBuilder_.getLoopTable();
+  // check in all AST args
+  for (int i = n_args - 1; i > 0; i--) {
+    auto arg = expression.get_op_arg(i);
+    // TODO check if it is a minusOP
+    if (isl_ast_expr_get_type(arg.get()) == isl_ast_expr_op) {
+
+      // modify the index variable:
+      // find key
+      std::string key;
+      // the -1 compensates for the offset in islAST args (0 is the Stmt ID)
+      if (failed(MLIRBuilder_.getLoopTable().getIdAtPos(i - 1, key))) {
+        llvm_unreachable("cannot find key");
+        return;
+      }
+      // calculate new opposite Value to be used within the loop
+      auto val = MLIRBuilder_.createAstOp(arg, i - 1);
+
+      // insert the value into Looptable
+      MLIRBuilder_.getLoopTable().update(key, val);
+    }
+  }
+
   auto stmtId = stmtExpression.get_id();
   auto stmt = islAst_.getScop().getStmt(stmtId);
   if (!stmt)
@@ -178,6 +205,8 @@ void IslNodeBuilder::createUser(isl::ast_node userNode) {
     MLIRBuilder_.dump();
     llvm_unreachable("cannot generate statement");
   }
+  //  restore loop table
+  MLIRBuilder_.getLoopTable() = tempTable;
 }
 
 void IslNodeBuilder::createBlock(isl::ast_node blockNode) {
